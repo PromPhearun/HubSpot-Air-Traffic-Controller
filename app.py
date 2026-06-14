@@ -557,93 +557,75 @@ with m_col4:
 
 st.markdown("---")
 
-# Layout split for Live Logs (left) and Judge Sandbox (right)
-left_panel, right_panel = st.columns([7, 3])
+# --- Judge's Interactive Sandbox ---
+st.subheader("⚖️ Judge's Interactive Sandbox")
+st.write("Simulate a marketing workflow trigger on a sandbox contact to test the judgment engine.")
 
-with left_panel:
-    st.subheader("📡 Global Traffic Control Console")
-    st.write("Live intercept logs showing active workflow traffic and automated LLM-enforced verdicts.")
-    
-    # Convert list of logs to a DataFrame to display
-    df_logs = pd.DataFrame(st.session_state.logs)
-    
-    st.dataframe(
-        df_logs,
-        column_config={
-            "Timestamp": st.column_config.TextColumn("Timestamp", width="medium"),
-            "Workflow Source": st.column_config.TextColumn("Workflow Source", width="medium"),
-            "Contact ID/Country": st.column_config.TextColumn("Contact ID/Country", width="large"),
-            "Channel": st.column_config.TextColumn("Channel", width="small"),
-            "AI Action Status": st.column_config.TextColumn("AI Action Status", width="small"),
-            "Reasoning Breakdown": st.column_config.TextColumn("Reasoning Breakdown", width="max"),
-        },
-        use_container_width=True,
-        hide_index=True
-    )
-
-with right_panel:
-    st.subheader("⚖️ Judge's Interactive Sandbox")
-    st.write("Simulate a marketing workflow trigger on a sandbox contact to test the judgment engine.")
-    
-    with st.form("sandbox_form", clear_on_submit=False):
-        sandbox_email = st.text_input("Target Contact Email (Sandbox)", value="example_user@deriv.com")
-        sandbox_channel = st.selectbox("Intended Channel", ["WhatsApp", "Email"])
+with st.form("sandbox_form", clear_on_submit=False):
+    col1, col2, col3, col4, col5 = st.columns([2.5, 1.5, 2.5, 3.5, 1.5])
+    with col1:
+        sandbox_email = st.text_input("Target Email", value="example_user@deriv.com")
+    with col2:
+        sandbox_channel = st.selectbox("Channel", ["WhatsApp", "Email"])
+    with col3:
         sandbox_workflow = st.selectbox(
-            "Select Originating Workflow",
+            "Workflow",
             ["LATAM Welcome Series", "EU/CIS Flash Sale", "ASIA Promo Pulse", "AFRICA Retention Push", "AdHoc Broadcast Campaign"]
         )
-        sandbox_message = st.text_area(
-            "Proposed Marketing Message",
+    with col4:
+        sandbox_message = st.text_input(
+            "Proposed Message",
             value="Urgent! Only 24 hours left to secure your 100% deposit bonus. Deposit now!",
             placeholder="Type your message content here..."
         )
+    with col5:
+        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True) # spacer to align button
+        run_audit = st.form_submit_button("🚀 Run Audit", disabled=env_error, use_container_width=True)
         
-        run_audit = st.form_submit_button("Run Traffic Audit", disabled=env_error)
-        
-    if run_audit:
-        # Validate input parameters and state
-        if env_error:
-            st.error("Please configure the missing keys in your .env file before running an audit.")
-        elif not sandbox_email:
-            st.warning("Please specify a target contact email.")
-        elif not validate_email(sandbox_email):
-            st.error("Please enter a valid target email address (e.g., user@example.com) to prevent bad request parameters.")
-        elif not sandbox_message.strip():
-            st.warning("Please provide a marketing message to audit.")
-        else:
-            with st.spinner("Analyzing HubSpot interaction history and auditing payload with Gemini..."):
-                try:
-                    # 1. Fetch live contact from HubSpot Sandbox
-                    contact_info = fetch_hubspot_contact_timeline(sandbox_email)
+if run_audit:
+    # Validate input parameters and state
+    if env_error:
+        st.error("Please configure the missing keys in your .env file before running an audit.")
+    elif not sandbox_email:
+        st.warning("Please specify a target contact email.")
+    elif not validate_email(sandbox_email):
+        st.error("Please enter a valid target email address (e.g., user@example.com) to prevent bad request parameters.")
+    elif not sandbox_message.strip():
+        st.warning("Please provide a marketing message to audit.")
+    else:
+        with st.spinner("Analyzing HubSpot interaction history and auditing payload with Gemini..."):
+            try:
+                # 1. Fetch live contact from HubSpot Sandbox
+                contact_info = fetch_hubspot_contact_timeline(sandbox_email)
+                
+                if contact_info is None:
+                    st.error(f"Contact '{sandbox_email}' not found in HubSpot Sandbox. "
+                             f"Please create the contact in your Sandbox or verify the email.")
+                else:
+                    firstname = contact_info["firstname"]
+                    country = contact_info["country"]
+                    timeline = contact_info["timeline"]
                     
-                    if contact_info is None:
-                        st.error(f"Contact '{sandbox_email}' not found in HubSpot Sandbox. "
-                                 f"Please create the contact in your Sandbox or verify the email.")
-                    else:
-                        firstname = contact_info["firstname"]
-                        country = contact_info["country"]
-                        timeline = contact_info["timeline"]
-                        
-                        # 2. Evaluate using Gemini Judgment Engine
-                        action, reason = evaluate_communication_fatigue(timeline, sandbox_message, sandbox_channel)
-                        
-                        # 3. Append results to session state log
-                        new_log = {
-                            "Timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "Workflow Source": f"Sandbox: {sandbox_workflow}",
-                            "Contact ID/Country": f"{sandbox_email} ({country})",
-                            "Channel": sandbox_channel,
-                            "AI Action Status": action,
-                            "Reasoning Breakdown": f"👤 {firstname} — {reason}"
-                        }
-                        
-                        st.session_state.logs.insert(0, new_log)
-                        
-                        # Success notifications
-                        st.success(f"Audit completed: {action}")
-                        
-                        st.markdown("### Raw AI Controller & CRM Diagnostics")
-                        st.code(f"""
+                    # 2. Evaluate using Gemini Judgment Engine
+                    action, reason = evaluate_communication_fatigue(timeline, sandbox_message, sandbox_channel)
+                    
+                    # 3. Append results to session state log
+                    new_log = {
+                        "Timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "Workflow Source": f"Sandbox: {sandbox_workflow}",
+                        "Contact ID/Country": f"{sandbox_email} ({country})",
+                        "Channel": sandbox_channel,
+                        "AI Action Status": action,
+                        "Reasoning Breakdown": f"👤 {firstname} — {reason}"
+                    }
+                    
+                    st.session_state.logs.insert(0, new_log)
+                    
+                    # Success notifications
+                    st.success(f"Audit completed: {action}")
+                    
+                    st.markdown("### Raw AI Controller & CRM Diagnostics")
+                    st.code(f"""
 [HubSpot CRM Fetch Output]
 Contact Name: {firstname}
 Country: {country}
@@ -662,9 +644,32 @@ Proposed Text: "{sandbox_message}"
 [Verdict Decision Block]
 ACTION: {action}
 REASONING: {reason}
-                        """, language="json")
-                        
-                        # Rerun to update telemetry metrics instantly
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"System Error: {str(e)}")
+                    """, language="json")
+                    
+                    # Rerun to update telemetry metrics instantly
+                    st.rerun()
+            except Exception as e:
+                st.error(f"System Error: {str(e)}")
+
+st.markdown("---")
+
+# --- Global Traffic Control Console ---
+st.subheader("📡 Global Traffic Control Console")
+st.write("Live intercept logs showing active workflow traffic and automated LLM-enforced verdicts.")
+
+# Convert list of logs to a DataFrame to display
+df_logs = pd.DataFrame(st.session_state.logs)
+
+st.dataframe(
+    df_logs,
+    column_config={
+        "Timestamp": st.column_config.TextColumn("Timestamp", width="medium"),
+        "Workflow Source": st.column_config.TextColumn("Workflow Source", width="medium"),
+        "Contact ID/Country": st.column_config.TextColumn("Contact ID/Country", width="large"),
+        "Channel": st.column_config.TextColumn("Channel", width="small"),
+        "AI Action Status": st.column_config.TextColumn("AI Action Status", width="small"),
+        "Reasoning Breakdown": st.column_config.TextColumn("Reasoning Breakdown", width="max"),
+    },
+    use_container_width=True,
+    hide_index=True
+)
