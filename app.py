@@ -1,7 +1,15 @@
 import streamlit as st
 import datetime
 import pandas as pd
-import random
+import requests
+import os
+import re
+from dotenv import load_dotenv
+from google import genai
+from google.genai import types
+
+# Load environment variables from .env
+load_dotenv()
 
 # Set Streamlit layout configuration to wide
 st.set_page_config(
@@ -40,6 +48,166 @@ st.markdown("""
 # --- Title Header ---
 st.title("🎛️ HubSpot Air Traffic Controller")
 st.caption("Deriv AI Hackathon Prototype — Global Outgoing Communication Interceptor & Guardrail")
+
+# --- Environment Configuration Check ---
+hubspot_token = os.getenv("HUBSPOT_API_TOKEN")
+gemini_key = os.getenv("GEMINI_API_KEY")
+
+env_error = False
+if not hubspot_token or "your_hubspot" in hubspot_token:
+    st.sidebar.error("❌ HUBSPOT_API_TOKEN is missing or not configured in .env")
+    env_error = True
+
+if not gemini_key or "your_gemini" in gemini_key:
+    st.sidebar.error("❌ GEMINI_API_KEY is missing or not configured in .env")
+    env_error = True
+
+# --- Helper Functions ---
+
+def validate_email(email: str) -> bool:
+    """Validate email format to prevent injection and bad inputs."""
+    email_regex = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+    return bool(re.match(email_regex, email))
+
+def fetch_hubspot_contact_timeline(email: str):
+    """
+    Fetches the HubSpot contact's core properties and associated notes.
+    """
+    if not hubspot_token:
+        raise ValueError("HUBSPOT_API_TOKEN is not configured.")
+        
+    headers = {
+        "Authorization": f"Bearer {hubspot_token}",
+        "Content-Type": "application/json"
+    }
+    
+    # Clean the input email parameter
+    email = email.strip()
+    
+    # 1. Fetch contact by email with properties and associations
+    url = f"https://api.hubapi.com/crm/v3/objects/contacts/{email}?idProperty=email&properties=firstname,country&associations=notes"
+    response = requests.get(url, headers=headers)
+    
+    if response.status_code == 404:
+        return None
+        
+    response.raise_for_status()
+    contact_data = response.json()
+    
+    properties = contact_data.get("properties", {})
+    firstname = properties.get("firstname", "Unknown")
+    country = properties.get("country", "Unknown")
+    contact_id = contact_data.get("id")
+    
+    # 2. Extract and fetch associated notes if any
+    timeline_events = []
+    associations = contact_data.get("associations", {})
+    notes_associations = associations.get("notes", {}).get("results", [])
+    
+    if notes_associations:
+        for assoc in notes_associations[:5]:  # Fetch up to 5 recent notes
+            note_id = assoc.get("id")
+            note_url = f"https://api.hubapi.com/crm/v3/objects/notes/{note_id}?properties=hs_note_body,hs_timestamp"
+            note_resp = requests.get(note_url, headers=headers)
+            if note_resp.status_code == 200:
+                note_data = note_resp.json()
+                note_props = note_data.get("properties", {})
+                body = note_props.get("hs_note_body", "")
+                timestamp = note_props.get("hs_timestamp", "")
+                
+                # HTML strip/clean for note body to keep it readable
+                clean_body = re.sub(r'<[^>]+>', '', body)
+                timeline_events.append({
+                    "type": "Communication/Note",
+                    "timestamp": timestamp,
+                    "content": clean_body
+                })
+                
+    return {
+        "firstname": firstname,
+        "country": country,
+        "id": contact_id,
+        "timeline": timeline_events
+    }
+
+def evaluate_communication_fatigue(timeline, proposed_message: str, channel: str):
+    """
+    Evaluates communication timeline against proposed message and channel for spamming/fatigue risks.
+    """
+    if not gemini_key:
+        raise ValueError("GEMINI_API_KEY is not configured.")
+        
+    client = genai.Client(api_key=gemini_key)
+    
+    timeline_desc = ""
+    if timeline and len(timeline) > 0:
+        for idx, event in enumerate(timeline):
+            timeline_desc += f"{idx+1}. [{event['timestamp']}] {event['type']}: {event['content']}\n"
+    else:
+        timeline_desc = "No recent communication history recorded."
+        
+    system_instruction = (
+        "You are the HubSpot Air Traffic Controller, a centralized, automated system-wide communication gatekeeper "
+        "designed to manage marketing volume, protect customer experience, and reduce costs.\n"
+        "Your task is to evaluate an outgoing communication request against a contact's recent history to prevent "
+        "user fatigue and high unsubscribe rates.\n\n"
+        "You MUST output your final decision in a strict format containing:\n"
+        "STATUS: <APPROVED, HOLD, or REROUTE>\n"
+        "RATIONALE: <Your concise reasoning explaining why this action was taken, max 2 sentences. "
+        "Include references to channel limits, fatigue, or communication frequency.>\n\n"
+        "Rules:\n"
+        "- APPROVED: If there is no communication in the last 24 hours, or the contact is highly engaged and communications are balanced.\n"
+        "- HOLD: Pause the communication for 24 hours if the contact has received too many premium messages (like WhatsApp) "
+        "recently (e.g., more than 1 in 24h, or 2 in 48h) or if the message is extremely aggressive/redundant.\n"
+        "- REROUTE: Downgrade from a high-impact/expensive channel (like WhatsApp) to a low-impact channel (like Email) "
+        "if they received a WhatsApp message recently but can still receive Email, or if we want to save costs while still delivering the message."
+    )
+    
+    prompt = f"""
+Evaluate the following outbound marketing campaign request:
+Proposed Channel: {channel}
+Proposed Message: "{proposed_message}"
+
+Contact's Recent Communication Timeline:
+{timeline_desc}
+
+Based on the rules, provide your verdict.
+"""
+    
+    response = client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=0.2
+        )
+    )
+    
+    text = response.text
+    
+    # Parse STATUS and RATIONALE from response
+    status = "APPROVED ✅"
+    rationale = text
+    
+    if "STATUS:" in text:
+        try:
+            parts = text.split("STATUS:", 1)[1].split("\n", 1)
+            raw_status = parts[0].strip().upper()
+            if "HOLD" in raw_status:
+                status = "HOLD 🛑"
+            elif "REROUTE" in raw_status:
+                status = "REROUTE 🔀"
+            else:
+                status = "APPROVED ✅"
+            
+            if "RATIONALE:" in parts[1]:
+                rationale = parts[1].split("RATIONALE:", 1)[1].strip()
+            else:
+                rationale = parts[1].strip()
+        except Exception:
+            pass
+            
+    return status, rationale
 
 # --- Initialize Session State for Telemetry ---
 if "logs" not in st.session_state:
@@ -84,17 +252,16 @@ held_count = sum(1 for log in st.session_state.logs if "HOLD" in log["AI Action 
 reroute_count = sum(1 for log in st.session_state.logs if "REROUTE" in log["AI Action Status"])
 
 # Est. WhatsApp Costs Saved: $0.08 per avoided fatigue incident (HOLD or REROUTE from WhatsApp)
-# We count any log that is HOLD or REROUTE and has channel 'WhatsApp'
 avoided_incidents = sum(
     1 for log in st.session_state.logs
     if ("HOLD" in log["AI Action Status"] or "REROUTE" in log["AI Action Status"]) and log["Channel"] == "WhatsApp"
 )
 costs_saved = avoided_incidents * 0.08
 
-# Unsubscribes Prevented (predictive model: say 1 unsubscribe prevented for every 2 avoided incidents, or scaled appropriately)
+# Unsubscribes Prevented
 unsubscribes_prevented = int(avoided_incidents * 0.5 + held_count * 0.25)
 
-# System Throttle Rate: (Held + Rerouted) / Total Audited
+# System Throttle Rate
 throttle_rate = ((held_count + reroute_count) / total_audited * 100) if total_audited > 0 else 0.0
 
 # --- Executive Analytics Header (4 metric cards) ---
@@ -103,36 +270,35 @@ m_col1, m_col2, m_col3, m_col4 = st.columns(4)
 with m_col1:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #22c55e;">
-        <div class="metric-label">Est. WhatsApp Costs Saved</div>
-        <div class="metric-value">${costs_saved:.2f}</div>
+         <div class="metric-label">Est. WhatsApp Costs Saved</div>
+         <div class="metric-value">${costs_saved:.2f}</div>
     </div>
     """, unsafe_allow_html=True)
 
 with m_col2:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #3b82f6;">
-        <div class="metric-label">Unsubscribes Prevented</div>
-        <div class="metric-value">{unsubscribes_prevented}</div>
+         <div class="metric-label">Unsubscribes Prevented</div>
+         <div class="metric-value">{unsubscribes_prevented}</div>
     </div>
     """, unsafe_allow_html=True)
 
 with m_col3:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #eab308;">
-        <div class="metric-label">Total Traffic Audited</div>
-        <div class="metric-value">{total_audited}</div>
+         <div class="metric-label">Total Traffic Audited</div>
+         <div class="metric-value">{total_audited}</div>
     </div>
     """, unsafe_allow_html=True)
 
 with m_col4:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #ef4444;">
-        <div class="metric-label">System Throttle Rate</div>
-        <div class="metric-value">{throttle_rate:.1f}%</div>
+         <div class="metric-label">System Throttle Rate</div>
+         <div class="metric-value">{throttle_rate:.1f}%</div>
     </div>
     """, unsafe_allow_html=True)
 
-# Add a divider
 st.markdown("---")
 
 # Layout split for Live Logs (left) and Judge Sandbox (right)
@@ -145,7 +311,6 @@ with left_panel:
     # Convert list of logs to a DataFrame to display
     df_logs = pd.DataFrame(st.session_state.logs)
     
-    # Style and format the dataframe
     st.dataframe(
         df_logs,
         column_config={
@@ -177,64 +342,73 @@ with right_panel:
             placeholder="Type your message content here..."
         )
         
-        run_audit = st.form_submit_button("Run Traffic Audit")
+        run_audit = st.form_submit_button("Run Traffic Audit", disabled=env_error)
         
     if run_audit:
-        # Simple input verification
-        if not sandbox_email:
+        # Validate input parameters and state
+        if env_error:
+            st.error("Please configure the missing keys in your .env file before running an audit.")
+        elif not sandbox_email:
             st.warning("Please specify a target contact email.")
+        elif not validate_email(sandbox_email):
+            st.error("Please enter a valid target email address (e.g., user@example.com) to prevent bad request parameters.")
+        elif not sandbox_message.strip():
+            st.warning("Please provide a marketing message to audit.")
         else:
             with st.spinner("Analyzing HubSpot interaction history and auditing payload with Gemini..."):
-                # --- MOCK SIMULATION LOGIC ---
-                # Under active development. To be wired with live APIs in subsequent phases.
-                
-                # Mock a judgment decision based on keywords
-                lower_msg = sandbox_message.lower()
-                is_aggressive = any(kw in lower_msg for kw in ["urgent", "deposit now", "100%", "immediate", "hurry"])
-                
-                if sandbox_channel == "WhatsApp" and is_aggressive:
-                    action = "HOLD 🛑"
-                    reason = "AGGRESSIVE FATIGUE RISK: Highly urgent commercial WhatsApp request sent too soon after the last customer touchpoint. Paused for 24 hours to prevent churn."
-                elif sandbox_channel == "WhatsApp":
-                    action = "REROUTE 🔀"
-                    reason = "HIGH IMPACT MITIGATION: WhatsApp channel request downgraded to low-impact email to protect customer's Meta subscription health."
-                else:
-                    action = "APPROVED ✅"
-                    reason = "SAFE SENTIMENT: Campaign message meets compliance thresholds. Contact engagement history is within safe limits for Email dispatch."
-                
-                # Append to st.session_state
-                new_log = {
-                    "Timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "Workflow Source": f"Sandbox: {sandbox_workflow}",
-                    "Contact ID/Country": f"{sandbox_email} (Sandbox)",
-                    "Channel": sandbox_channel,
-                    "AI Action Status": action,
-                    "Reasoning Breakdown": reason
-                }
-                
-                # Insert at the beginning of logs list for instant display at the top of the table/df
-                st.session_state.logs.insert(0, new_log)
-                
-                # Success notification and raw outputs
-                st.success(f"Audit completed: {action}")
-                
-                st.markdown("### Raw LLM Logic Output")
-                st.code(f"""
+                try:
+                    # 1. Fetch live contact from HubSpot Sandbox
+                    contact_info = fetch_hubspot_contact_timeline(sandbox_email)
+                    
+                    if contact_info is None:
+                        st.error(f"Contact '{sandbox_email}' not found in HubSpot Sandbox. "
+                                 f"Please create the contact in your Sandbox or verify the email.")
+                    else:
+                        firstname = contact_info["firstname"]
+                        country = contact_info["country"]
+                        timeline = contact_info["timeline"]
+                        
+                        # 2. Evaluate using Gemini Judgment Engine
+                        action, reason = evaluate_communication_fatigue(timeline, sandbox_message, sandbox_channel)
+                        
+                        # 3. Append results to session state log
+                        new_log = {
+                            "Timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "Workflow Source": f"Sandbox: {sandbox_workflow}",
+                            "Contact ID/Country": f"{sandbox_email} ({country})",
+                            "Channel": sandbox_channel,
+                            "AI Action Status": action,
+                            "Reasoning Breakdown": f"👤 {firstname} — {reason}"
+                        }
+                        
+                        st.session_state.logs.insert(0, new_log)
+                        
+                        # Success notifications
+                        st.success(f"Audit completed: {action}")
+                        
+                        st.markdown("### Raw AI Controller & CRM Diagnostics")
+                        st.code(f"""
+[HubSpot CRM Fetch Output]
+Contact Name: {firstname}
+Country: {country}
+ID: {contact_info['id']}
+Timeline Events: {len(timeline)} notes retrieved.
+
 [Gemini Input Prompt]
 Evaluate the following outbound marketing campaign:
 Channel: {sandbox_channel}
 Workflow: {sandbox_workflow}
 Proposed Text: "{sandbox_message}"
 
-[Contact Timeline Context (Mocked Sandbox Profile)]
-- Last contacted: 18 hours ago via Email
-- Active Opt-in: Yes
-- Fatigue Score: High
+[Contact Timeline Context (HubSpot Sandbox Profile)]
+{timeline if timeline else "No recent communications recorded."}
 
 [Verdict Decision Block]
-ACTION: {action.split()[0]}
+ACTION: {action}
 REASONING: {reason}
-                """, language="json")
-                
-                # Trigger a rerun so the main table updates immediately
-                st.rerun()
+                        """, language="json")
+                        
+                        # Rerun to update telemetry metrics instantly
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"System Error: {str(e)}")
