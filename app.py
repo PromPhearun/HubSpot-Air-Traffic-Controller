@@ -49,6 +49,25 @@ st.markdown("""
 st.title("🎛️ HubSpot Air Traffic Controller")
 st.caption("Deriv AI Hackathon Prototype — Global Outgoing Communication Interceptor & Guardrail")
 
+# --- Helper to fetch LiteLLM models ---
+@st.cache_data(ttl=300)
+def fetch_available_models(base_url: str, api_key: str):
+    """Fetches available models from the LiteLLM/OpenAI-compatible models endpoint."""
+    try:
+        url = f"{base_url.rstrip('/')}/models"
+        headers = {
+            "Authorization": f"Bearer {api_key.strip()}"
+        }
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            # Extract IDs from v1/models format {"data": [{"id": "...", ...}]}
+            models = [item["id"] for item in data.get("data", []) if "id" in item]
+            return sorted(models)
+    except Exception:
+        pass
+    return []
+
 # --- Environment Configuration Check ---
 hubspot_token = os.getenv("HUBSPOT_API_TOKEN")
 gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
@@ -68,7 +87,25 @@ else:
     if api_base_url:
         st.sidebar.success(f"🌐 Connected to LiteLLM/OpenAI compatible Endpoint")
         st.sidebar.info(f"🔗 URL: {api_base_url}")
-        st.sidebar.info(f"🤖 Model: {openai_model_name}")
+        
+        # Attempt to dynamically fetch model list
+        available_models = fetch_available_models(api_base_url, gemini_key)
+        if available_models:
+            # If default model is in list, pre-select it
+            default_idx = 0
+            if openai_model_name in available_models:
+                default_idx = available_models.index(openai_model_name)
+            
+            openai_model_name = st.sidebar.selectbox(
+                "🤖 Active Model ID",
+                options=available_models,
+                index=default_idx,
+                help="Fetched in real-time from your LiteLLM Model Explorer"
+            )
+        else:
+            st.sidebar.info(f"🤖 Model: {openai_model_name}")
+            st.sidebar.warning("⚠️ Could not fetch model list. Using manual model ID.")
+            
     elif gemini_key.strip().startswith("sk-"):
         st.sidebar.success("🔑 Using OpenAI API Key")
         st.sidebar.info(f"🤖 Model: {openai_model_name}")
