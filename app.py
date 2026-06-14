@@ -4,6 +4,10 @@ import pandas as pd
 import requests
 import os
 import re
+import threading
+import json
+import uuid
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -112,6 +116,140 @@ else:
     else:
         st.sidebar.success("🔑 Using Google Gemini API Key")
         st.sidebar.info(f"🤖 Model: gemini-2.5-flash")
+
+# --- Shared Resources and Background Server ---
+
+@st.cache_resource
+def get_shared_logs():
+    """Persistent thread-safe shared list of webhook logs."""
+    return []
+
+@st.cache_resource
+def get_shared_logs_lock():
+    """Persistent threading lock for shared logs access."""
+    return threading.Lock()
+
+def trigger_streamlit_rerun():
+    """Triggers a rerun on all active Streamlit sessions to update UI."""
+    try:
+        from streamlit.runtime import get_instance
+        runtime = get_instance()
+        if runtime:
+            for session_info in runtime._session_info_by_id.values():
+                session_info.session.request_rerun()
+    except Exception:
+        pass
+
+class WebhookHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # Suppress logging to console for cleaner stdout/stderr
+        pass
+
+    def do_POST(self):
+        if self.path not in ['/', '/webhook']:
+            self.send_response(404)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Path not found"}).encode('utf-8'))
+            return
+
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = self.rfile.read(content_length)
+
+        try:
+            payload = json.loads(post_data.decode('utf-8'))
+        except Exception:
+            self.send_response(400)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Malformed JSON payload"}).encode('utf-8'))
+            return
+
+        email = payload.get('email', '').strip()
+        firstname = payload.get('firstname', '').strip()
+        country = payload.get('country', '').strip()
+        workflow_source = payload.get('workflow_source', '').strip()
+        proposed_message = payload.get('proposed_message', '').strip()
+        channel = payload.get('channel', '').strip()
+
+        if not email:
+            self.send_response(400)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Missing 'email' in request body"}).encode('utf-8'))
+            return
+
+        if not validate_email(email):
+            self.send_response(400)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Invalid email format"}).encode('utf-8'))
+            return
+
+        try:
+            # 1. Fetch live contact from HubSpot Sandbox
+            contact_info = fetch_hubspot_contact_timeline(email)
+            if contact_info is not None:
+                fetched_firstname = contact_info.get("firstname") or firstname or "Unknown"
+                fetched_country = contact_info.get("country") or country or "Unknown"
+                timeline = contact_info.get("timeline") or []
+            else:
+                fetched_firstname = firstname or "Unknown"
+                fetched_country = country or "Unknown"
+                timeline = []
+
+            # 2. Evaluate using Gemini Judgment Engine
+            action, reason = evaluate_communication_fatigue(timeline, proposed_message, channel)
+
+            # 3. Create log entry
+            new_log = {
+                "id": str(uuid.uuid4()),
+                "Timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Workflow Source": f"Webhook: {workflow_source}" if workflow_source else "Webhook Trigger",
+                "Contact ID/Country": f"{email} ({fetched_country})",
+                "Channel": channel or "Email",
+                "AI Action Status": action,
+                "Reasoning Breakdown": f"👤 {fetched_firstname} — {reason}"
+            }
+
+            # Prepend/append to shared cache
+            shared_logs = get_shared_logs()
+            lock = get_shared_logs_lock()
+            with lock:
+                shared_logs.append(new_log)
+
+            # Request Streamlit rerun for immediate UI update
+            trigger_streamlit_rerun()
+
+            # Respond with 200 OK
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "status": action,
+                "rationale": reason,
+                "contact": {
+                    "firstname": fetched_firstname,
+                    "country": fetched_country
+                }
+            }).encode('utf-8'))
+
+        except Exception as e:
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": f"Internal judgment server error: {str(e)}"}).encode('utf-8'))
+
+def run_http_server(port):
+    server = HTTPServer(('0.0.0.0', port), WebhookHandler)
+    server.serve_forever()
+
+@st.cache_resource
+def start_background_server(port=8000):
+    """Spawns the background HTTP webhook receiver thread exactly once."""
+    t = threading.Thread(target=run_http_server, args=(port,), daemon=True)
+    t.start()
+    return t
 
 # --- Helper Functions ---
 
@@ -350,6 +488,19 @@ if "logs" not in st.session_state:
             "Reasoning Breakdown": "Contact has high engagement rates and last received an email 5 days ago."
         }
     ]
+
+# --- Synchronize Shared Background Webhook Logs with Streamlit Session State ---
+shared_logs = get_shared_logs()
+lock = get_shared_logs_lock()
+with lock:
+    existing_ids = {log.get("id") for log in st.session_state.logs if "id" in log}
+    new_items = [log for log in shared_logs if log.get("id") not in existing_ids]
+    if new_items:
+        for item in new_items:
+            st.session_state.logs.insert(0, item)
+
+# --- Start Background API Webhook Server on Port 8000 ---
+start_background_server(port=8000)
 
 # --- Dynamic Calculation of Metrics ---
 total_audited = len(st.session_state.logs)
