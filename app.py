@@ -51,16 +51,30 @@ st.caption("Deriv AI Hackathon Prototype — Global Outgoing Communication Inter
 
 # --- Environment Configuration Check ---
 hubspot_token = os.getenv("HUBSPOT_API_TOKEN")
-gemini_key = os.getenv("GEMINI_API_KEY")
+gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
+api_base_url = os.getenv("API_BASE_URL") or os.getenv("OPENAI_API_BASE")
+openai_model_name = os.getenv("OPENAI_MODEL_NAME") or "gpt-4o-mini"
 
 env_error = False
 if not hubspot_token or "your_hubspot" in hubspot_token:
     st.sidebar.error("❌ HUBSPOT_API_TOKEN is missing or not configured in .env")
     env_error = True
 
-if not gemini_key or "your_gemini" in gemini_key:
-    st.sidebar.error("❌ GEMINI_API_KEY is missing or not configured in .env")
+if not gemini_key or "your_gemini" in gemini_key or "your_openai" in gemini_key:
+    st.sidebar.error("❌ API key (GEMINI_API_KEY or OPENAI_API_KEY) is missing or not configured in .env")
     env_error = True
+else:
+    # If using LiteLLM/OpenAI Compatible API
+    if api_base_url:
+        st.sidebar.success(f"🌐 Connected to LiteLLM/OpenAI compatible Endpoint")
+        st.sidebar.info(f"🔗 URL: {api_base_url}")
+        st.sidebar.info(f"🤖 Model: {openai_model_name}")
+    elif gemini_key.strip().startswith("sk-"):
+        st.sidebar.success("🔑 Using OpenAI API Key")
+        st.sidebar.info(f"🤖 Model: {openai_model_name}")
+    else:
+        st.sidebar.success("🔑 Using Google Gemini API Key")
+        st.sidebar.info(f"🤖 Model: gemini-2.5-flash")
 
 # --- Helper Functions ---
 
@@ -133,10 +147,10 @@ def fetch_hubspot_contact_timeline(email: str):
 def evaluate_communication_fatigue(timeline, proposed_message: str, channel: str):
     """
     Evaluates communication timeline against proposed message and channel for spamming/fatigue risks.
-    Supports either OpenAI API key (starts with sk-) or Google Gemini API key.
+    Supports either OpenAI API key, custom LiteLLM base URL, or Google Gemini API key.
     """
     if not gemini_key:
-        raise ValueError("API Key (GEMINI_API_KEY) is not configured in .env.")
+        raise ValueError("API Key (GEMINI_API_KEY or OPENAI_API_KEY) is not configured in .env.")
         
     timeline_desc = ""
     if timeline and len(timeline) > 0:
@@ -173,37 +187,71 @@ Contact's Recent Communication Timeline:
 Based on the rules, provide your verdict.
 """
     
-    # Check if the API key belongs to OpenAI (starts with 'sk-')
-    if gemini_key.strip().startswith("sk-"):
-        url = "https://api.openai.com/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {gemini_key.strip()}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "gpt-4o-mini",
-            "messages": [
-                {"role": "system", "content": system_instruction},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.2
-        }
-        response = requests.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        res_data = response.json()
-        text = res_data["choices"][0]["message"]["content"]
-    else:
-        # Standard Google Gemini SDK call
-        client = genai.Client(api_key=gemini_key)
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.2
+    try:
+        # Check if we should use OpenAI / LiteLLM proxy compatibility
+        if gemini_key.strip().startswith("sk-") or api_base_url:
+            base_url = (api_base_url or "https://api.openai.com/v1").rstrip("/")
+            url = f"{base_url}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {gemini_key.strip()}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": openai_model_name,
+                "messages": [
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.2
+            }
+            
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            
+            if response.status_code == 401:
+                raise ValueError(
+                    f"Unauthorized (401). Please check that your API Key is valid and authorized for the endpoint: {base_url}."
+                )
+            elif response.status_code == 404:
+                raise ValueError(
+                    f"Not Found (404). Please verify that the Endpoint Base URL '{base_url}' is correct "
+                    f"and that the model '{openai_model_name}' is supported on your provider."
+                )
+                
+            response.raise_for_status()
+            res_data = response.json()
+            text = res_data["choices"][0]["message"]["content"]
+        else:
+            # Standard Google Gemini SDK call
+            client = genai.Client(api_key=gemini_key)
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.2
+                )
             )
-        )
-        text = response.text
+            text = response.text
+            
+    except requests.exceptions.RequestException as re_err:
+        status_code = re_err.response.status_code if re_err.response is not None else "Connection Error"
+        resp_text = re_err.response.text if re_err.response is not None else str(re_err)
+        
+        # Format a beautifully descriptive error
+        if status_code == 401:
+            raise ValueError(
+                f"Unauthorized (401) from LLM Provider. Please ensure your LiteLLM API key is valid "
+                f"and that your billing/limits are sufficient."
+            )
+        elif status_code == 404:
+            raise ValueError(
+                f"Endpoint/Model Not Found (404) from LLM Provider. Please verify your API_BASE_URL "
+                f"({api_base_url}) and check if the model name '{openai_model_name}' is supported."
+            )
+        else:
+            raise RuntimeError(f"HTTP {status_code} Error: {resp_text}")
+    except Exception as e:
+        raise RuntimeError(f"AI Judgment Engine Error: {str(e)}")
     
     # Parse STATUS and RATIONALE from response
     status = "APPROVED ✅"
