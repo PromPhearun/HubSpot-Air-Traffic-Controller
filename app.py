@@ -133,12 +133,11 @@ def fetch_hubspot_contact_timeline(email: str):
 def evaluate_communication_fatigue(timeline, proposed_message: str, channel: str):
     """
     Evaluates communication timeline against proposed message and channel for spamming/fatigue risks.
+    Supports either OpenAI API key (starts with sk-) or Google Gemini API key.
     """
     if not gemini_key:
-        raise ValueError("GEMINI_API_KEY is not configured.")
+        raise ValueError("API Key (GEMINI_API_KEY) is not configured in .env.")
         
-    client = genai.Client(api_key=gemini_key)
-    
     timeline_desc = ""
     if timeline and len(timeline) > 0:
         for idx, event in enumerate(timeline):
@@ -174,16 +173,37 @@ Contact's Recent Communication Timeline:
 Based on the rules, provide your verdict.
 """
     
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=0.2
+    # Check if the API key belongs to OpenAI (starts with 'sk-')
+    if gemini_key.strip().startswith("sk-"):
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {gemini_key.strip()}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.2
+        }
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        res_data = response.json()
+        text = res_data["choices"][0]["message"]["content"]
+    else:
+        # Standard Google Gemini SDK call
+        client = genai.Client(api_key=gemini_key)
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.2
+            )
         )
-    )
-    
-    text = response.text
+        text = response.text
     
     # Parse STATUS and RATIONALE from response
     status = "APPROVED ✅"
