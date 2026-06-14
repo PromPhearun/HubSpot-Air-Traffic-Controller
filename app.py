@@ -32,6 +32,8 @@ st.markdown("""
         padding: 15px;
         border-left: 5px solid #3b82f6;
         margin-bottom: 10px;
+        position: relative;
+        cursor: help;
     }
     .metric-label {
         font-size: 0.85rem;
@@ -45,6 +47,33 @@ st.markdown("""
         color: #f8fafc;
         font-weight: 700;
         margin-top: 5px;
+    }
+    .metric-card .tooltip-text {
+        visibility: hidden;
+        width: 240px;
+        background-color: #0f172a;
+        color: #f1f5f9;
+        text-align: center;
+        border-radius: 6px;
+        padding: 8px 12px;
+        position: absolute;
+        z-index: 100;
+        bottom: 105%;
+        left: 50%;
+        transform: translateX(-50%);
+        opacity: 0;
+        transition: opacity 0.2s ease-in-out, visibility 0.2s ease-in-out;
+        font-size: 0.75rem;
+        font-weight: 500;
+        text-transform: none;
+        letter-spacing: normal;
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+        border: 1px solid #475569;
+        pointer-events: none;
+    }
+    .metric-card:hover .tooltip-text {
+        visibility: visible;
+        opacity: 1;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -525,7 +554,8 @@ m_col1, m_col2, m_col3, m_col4 = st.columns(4)
 
 with m_col1:
     st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #22c55e;" title="Calculated dynamically assuming $0.08 per avoided message fatigue incident.">
+    <div class="metric-card" style="border-left-color: #22c55e;">
+         <div class="tooltip-text">Calculated dynamically assuming $0.08 per avoided message fatigue incident.</div>
          <div class="metric-label">Est. WhatsApp Costs Saved</div>
          <div class="metric-value">${costs_saved:.2f}</div>
     </div>
@@ -533,7 +563,8 @@ with m_col1:
 
 with m_col2:
     st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #3b82f6;" title="A predictive metric representing saved customer churn.">
+    <div class="metric-card" style="border-left-color: #3b82f6;">
+         <div class="tooltip-text">A predictive metric representing saved customer churn.</div>
          <div class="metric-label">Unsubscribes Prevented</div>
          <div class="metric-value">{unsubscribes_prevented}</div>
     </div>
@@ -541,7 +572,8 @@ with m_col2:
 
 with m_col3:
     st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #eab308;" title="A running counter of all evaluations processed by the controller.">
+    <div class="metric-card" style="border-left-color: #eab308;">
+         <div class="tooltip-text">A running counter of all evaluations processed by the controller.</div>
          <div class="metric-label">Total Traffic Audited</div>
          <div class="metric-value">{total_audited}</div>
     </div>
@@ -549,7 +581,8 @@ with m_col3:
 
 with m_col4:
     st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #ef4444;" title="The percentage of overall traffic currently paused or rerouted ((Held + Rerouted) / Total Audited).">
+    <div class="metric-card" style="border-left-color: #ef4444;">
+         <div class="tooltip-text">The percentage of overall traffic currently paused or rerouted ((Held + Rerouted) / Total Audited).</div>
          <div class="metric-label">System Throttle Rate</div>
          <div class="metric-value">{throttle_rate:.1f}%</div>
     </div>
