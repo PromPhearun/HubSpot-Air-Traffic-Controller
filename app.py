@@ -525,7 +525,7 @@ m_col1, m_col2, m_col3, m_col4 = st.columns(4)
 
 with m_col1:
     st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #22c55e;">
+    <div class="metric-card" style="border-left-color: #22c55e;" title="Calculated dynamically assuming $0.08 per avoided message fatigue incident.">
          <div class="metric-label">Est. WhatsApp Costs Saved</div>
          <div class="metric-value">${costs_saved:.2f}</div>
     </div>
@@ -533,7 +533,7 @@ with m_col1:
 
 with m_col2:
     st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #3b82f6;">
+    <div class="metric-card" style="border-left-color: #3b82f6;" title="A predictive metric representing saved customer churn.">
          <div class="metric-label">Unsubscribes Prevented</div>
          <div class="metric-value">{unsubscribes_prevented}</div>
     </div>
@@ -541,7 +541,7 @@ with m_col2:
 
 with m_col3:
     st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #eab308;">
+    <div class="metric-card" style="border-left-color: #eab308;" title="A running counter of all evaluations processed by the controller.">
          <div class="metric-label">Total Traffic Audited</div>
          <div class="metric-value">{total_audited}</div>
     </div>
@@ -549,7 +549,7 @@ with m_col3:
 
 with m_col4:
     st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #ef4444;">
+    <div class="metric-card" style="border-left-color: #ef4444;" title="The percentage of overall traffic currently paused or rerouted ((Held + Rerouted) / Total Audited).">
          <div class="metric-label">System Throttle Rate</div>
          <div class="metric-value">{throttle_rate:.1f}%</div>
     </div>
