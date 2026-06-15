@@ -7,6 +7,7 @@ import re
 import threading
 import json
 import uuid
+import base64
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 from google import genai
@@ -26,6 +27,10 @@ st.set_page_config(
 # --- Custom Styling for Dark Mode/Hackathon Vibe ---
 st.markdown("""
 <style>
+    /* Hide Streamlit input/form instruction hints */
+    div[data-testid="InputInstructions"] {
+        display: none !important;
+    }
     .metric-card {
         background-color: #1e293b;
         border-radius: 8px;
@@ -79,8 +84,24 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- Title Header ---
-st.title("🎛️ HubSpot Air Traffic Controller")
-st.caption("Deriv AI Hackathon Prototype — Global Outgoing Communication Interceptor & Guardrail")
+def get_image_base64(path):
+    try:
+        with open(path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode()
+    except Exception:
+        return ""
+
+img_base64 = get_image_base64("traffic-light.png")
+
+if img_base64:
+    st.markdown(
+        f'<h1><img src="data:image/png;base64,{img_base64}" style="vertical-align: middle; height: 50px; margin-right: 15px; margin-bottom: 8px;">HubSpot Air Traffic Controller</h1>',
+        unsafe_allow_html=True
+    )
+else:
+    st.title("🚦 HubSpot Air Traffic Controller")
+
+st.caption("Global Outgoing Communication Interceptor & Guardrail")
 
 # --- Helper to fetch LiteLLM models ---
 @st.cache_data(ttl=300)
@@ -591,8 +612,8 @@ with m_col4:
 st.markdown("---")
 
 # --- Judge's Interactive Sandbox ---
-st.subheader("⚖️ Judge's Interactive Sandbox")
-st.write("Simulate a marketing workflow trigger on a sandbox contact to test the judgment engine.")
+st.subheader("⚖️ Interactive Sandbox")
+st.write("Marketing workflow trigger on a sandbox contact to test the engine.")
 
 with st.form("sandbox_form", clear_on_submit=False):
     col1, col2, col3, col4, col5 = st.columns([2.5, 1.5, 2.5, 3.5, 1.5])
@@ -686,12 +707,42 @@ REASONING: {reason}
 
 st.markdown("---")
 
+def wrap_to_two_rows(text, max_len=75):
+    """
+    If the text is longer than max_len, cleanly wrap/split it into exactly two rows
+    separated by a newline.
+    """
+    if not isinstance(text, str) or len(text) <= max_len:
+        return text
+    
+    words = text.split()
+    if not words:
+        return text
+        
+    best_diff = float('inf')
+    best_split = len(words) // 2
+    
+    for i in range(1, len(words)):
+        line1_len = len(" ".join(words[:i]))
+        line2_len = len(" ".join(words[i:]))
+        diff = abs(line1_len - line2_len)
+        if diff < best_diff:
+            best_diff = diff
+            best_split = i
+            
+    line1 = " ".join(words[:best_split])
+    line2 = " ".join(words[best_split:])
+    return f"{line1}\n{line2}"
+
 # --- Global Traffic Control Console ---
 st.subheader("📡 Global Traffic Control Console")
 st.write("Live intercept logs showing active workflow traffic and automated LLM-enforced verdicts.")
 
 # Convert list of logs to a DataFrame to display
 df_logs = pd.DataFrame(st.session_state.logs)
+
+if not df_logs.empty and "Reasoning Breakdown" in df_logs.columns:
+    df_logs["Reasoning Breakdown"] = df_logs["Reasoning Breakdown"].apply(lambda x: wrap_to_two_rows(x))
 
 st.dataframe(
     df_logs,
